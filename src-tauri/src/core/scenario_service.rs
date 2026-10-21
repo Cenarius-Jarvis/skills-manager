@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use super::{
+    central_repo,
     error::{AppError, TargetConflictDetail},
     skill_store::{ScenarioRecord, SkillStore, SkillTargetRecord},
     sync_engine, sync_metadata, tool_adapters,
@@ -196,20 +197,56 @@ fn remove_recorded_or_warn(path: &Path, recorded_mode: &str) -> bool {
 /// keeps any recorded path inside the tool's root, so a recorded path that
 /// differs from the desired one lies outside it.
 ///
-/// Links are removed as usual. A copy-mode directory stays where it is:
-/// nothing loads it for this tool any more, and it may hold edits made there
-/// that exist nowhere else (#593). A matching content hash is no proof it is
-/// unedited — the hash skips `.gitignore` and caches. Callers drop the record
-/// either way.
-pub(crate) fn release_abandoned_target(path: &Path, recorded_mode: &str) {
-    if recorded_mode == "copy" {
-        log::warn!(
-            "Keeping {}: a copy at a path this tool no longer reads; it may hold edits",
-            path.display()
-        );
+/// Links are removed as usual. A copy-mode directory may hold edits made
+/// there that exist nowhere else (#593), and a matching content hash is no
+/// proof it is unedited: the hash skips `.gitignore` and caches. It cannot
+/// stay where it is either. Another agent may read that directory too, and
+/// moving the tool back would find it in the way. So it is moved into the
+/// library's `kept-copies/<tool>/`. Callers drop the record either way.
+pub(crate) fn release_abandoned_target(path: &Path, recorded_mode: &str, tool: &str) {
+    if recorded_mode != "copy" {
+        remove_recorded_or_warn(path, recorded_mode);
         return;
     }
-    remove_recorded_or_warn(path, recorded_mode);
+    // Only what still looks like our copy is ours to move.
+    match sync_engine::matches_recorded_deployment(path, recorded_mode) {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(e) => {
+            log::warn!("Keeping {}: cannot inspect it ({e})", path.display());
+            return;
+        }
+    }
+    match move_into_kept_copies(path, tool) {
+        Ok(kept) => log::warn!(
+            "Moved {} to {}: {tool} no longer reads that path, and the copy may hold edits",
+            path.display(),
+            kept.display()
+        ),
+        Err(e) => log::warn!(
+            "Keeping {} in place: could not move it into the library ({e})",
+            path.display()
+        ),
+    }
+}
+
+/// A rename only, so nothing is copied half-way; across volumes it fails and
+/// the caller keeps the copy where it is.
+fn move_into_kept_copies(path: &Path, tool: &str) -> std::io::Result<PathBuf> {
+    let root = central_repo::base_dir().join("kept-copies").join(tool);
+    std::fs::create_dir_all(&root)?;
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "skill".to_string());
+    let mut kept = root.join(&name);
+    let mut n = 2;
+    while kept.exists() {
+        kept = root.join(format!("{name}-{n}"));
+        n += 1;
+    }
+    std::fs::rename(path, &kept)?;
+    Ok(kept)
 }
 
 /// A key identifying the *directory entry* a target path names, used to spot
@@ -325,7 +362,7 @@ pub fn sync_desired_targets(
                         desired.tool
                     );
                 } else {
-                    release_abandoned_target(&target_path, &existing.mode);
+                    release_abandoned_target(&target_path, &existing.mode, &desired.tool);
                 }
                 if let Err(e) = store.delete_target(&desired.skill_id, &desired.tool) {
                     log::warn!(
@@ -541,7 +578,7 @@ pub fn unsync_obsolete_scenario_targets(
                 // Still deployed to this tool under the new preset, only
                 // somewhere else: the old path is abandoned, not removed by
                 // the user.
-                Some(_) => release_abandoned_target(&path, &target.mode),
+                Some(_) => release_abandoned_target(&path, &target.mode, &target.tool),
                 None => {
                     remove_recorded_or_warn(&path, &target.mode);
                 }
@@ -640,7 +677,7 @@ pub fn sync_skill_to_active_scenario(
                                 adapter.key
                             );
                         } else {
-                            release_abandoned_target(&old_path, &old.mode);
+                            release_abandoned_target(&old_path, &old.mode, &adapter.key);
                         }
                         let _ = store.delete_target(skill_id, &adapter.key);
                     } else {
@@ -1447,7 +1484,6 @@ fn apply_remove(
 #[cfg(test)]
 mod sync_desired_targets_tests {
     use super::*;
-    use crate::core::central_repo;
     use crate::core::skill_store::{SkillRecord, SkillStore, SkillTargetRecord};
     use std::fs;
     use tempfile::tempdir;

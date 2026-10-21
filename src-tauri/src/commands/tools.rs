@@ -45,7 +45,7 @@ fn unsync_all_for_tool(store: &SkillStore, tool_key: &str) {
 
 /// Drop every target record of `tool_key`. With `new_dir`, the tool has just
 /// moved there: deployments outside it sit at a path the tool no longer reads
-/// and are released (copies kept) rather than removed. Without it, the user is
+/// and are released (copies moved into the library) rather than removed. Without it, the user is
 /// taking the skills away from the tool, so they are removed.
 fn release_tool_targets(store: &SkillStore, tool_key: &str, new_dir: Option<&Path>) {
     let targets = store.get_all_targets().unwrap_or_default();
@@ -59,7 +59,7 @@ fn release_tool_targets(store: &SkillStore, tool_key: &str, new_dir: Option<&Pat
             let path = PathBuf::from(&target.target_path);
             match new_dir {
                 Some(dir) if path.parent() != Some(dir) => {
-                    scenario_service::release_abandoned_target(&path, &target.mode);
+                    scenario_service::release_abandoned_target(&path, &target.mode, tool_key);
                 }
                 _ => {
                     sync_engine::remove_recorded_target_or_warn(&path, &target.mode);
@@ -489,6 +489,7 @@ pub fn migrate_legacy_tool_keys(store: &SkillStore) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::central_repo;
     use crate::core::skill_store::{ScenarioRecord, SkillRecord, SkillTargetRecord};
     use std::fs;
     use tempfile::tempdir;
@@ -813,16 +814,28 @@ mod tests {
     }
 
     /// One skill in the active preset, deployed to `old_base` with `mode`. A
-    /// copy deployment also gets a file the user added to it there.
+    /// copy deployment also gets a file the user added to it there. The
+    /// library lives in the temp dir, since kept copies are moved into it.
     struct MovedTool {
         _tmp: tempfile::TempDir,
+        _lock: std::sync::MutexGuard<'static, ()>,
         store: SkillStore,
+        old_base: PathBuf,
         old_copy: PathBuf,
         new_base: PathBuf,
+        kept_root: PathBuf,
+    }
+
+    impl Drop for MovedTool {
+        fn drop(&mut self) {
+            central_repo::set_test_base_dir_override(None);
+        }
     }
 
     fn deploy_before_the_move(mode: &str) -> MovedTool {
+        let lock = central_repo::test_base_dir_lock();
         let tmp = tempdir().unwrap();
+        central_repo::set_test_base_dir_override(Some(tmp.path().join("library")));
         let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
         let source_base = tmp.path().join("central");
         let old_base = tmp.path().join("old-skills");
@@ -847,11 +860,15 @@ mod tests {
         if mode == "copy" {
             fs::write(old_copy.join("notes.md"), "edited by the user").unwrap();
         }
+        let kept_root = tmp.path().join("library/kept-copies/test_agent");
         MovedTool {
             _tmp: tmp,
+            _lock: lock,
             store,
+            old_base,
             old_copy,
             new_base,
+            kept_root,
         }
     }
 
@@ -865,9 +882,15 @@ mod tests {
 
     fn assert_kept_and_redeployed(moved: &MovedTool) {
         assert_eq!(
-            fs::read_to_string(moved.old_copy.join("notes.md")).unwrap(),
+            fs::read_to_string(moved.kept_root.join("skill-a/notes.md")).unwrap(),
             "edited by the user",
-            "the edited copy at the old path was deleted"
+            "the edited copy was not kept in the library"
+        );
+        // Moved out, not left behind: another agent may read the old
+        // directory, and moving back must not find it in the way.
+        assert!(
+            !moved.old_copy.exists(),
+            "the copy was left at the old path"
         );
         assert_eq!(
             fs::read_to_string(moved.new_base.join("skill-a/unique.txt")).unwrap(),
@@ -980,6 +1003,32 @@ mod tests {
         assert!(
             !old_b.exists(),
             "a skill the new preset drops must be removed"
+        );
+    }
+
+    /// Moving a tool and then moving it back: the first move must not leave
+    /// an unrecorded directory at the original path, or the way back refuses
+    /// to deploy there while the save reports success.
+    #[test]
+    fn moving_a_tool_away_and_back_redeploys_at_the_original_path() {
+        let moved = deploy_before_the_move("copy");
+        let new_base = moved.new_base.to_string_lossy().to_string();
+        let old_base = moved.old_base.to_string_lossy().to_string();
+
+        apply_tool_skills_dir(&moved.store, "test_agent", &new_base).unwrap();
+        apply_tool_skills_dir(&moved.store, "test_agent", &old_base).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(moved.old_copy.join("unique.txt")).unwrap(),
+            "library",
+            "the skill was not redeployed at the original path"
+        );
+        let targets = moved.store.get_targets_for_skill("a").unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(PathBuf::from(&targets[0].target_path), moved.old_copy);
+        assert_eq!(
+            fs::read_to_string(moved.kept_root.join("skill-a/notes.md")).unwrap(),
+            "edited by the user"
         );
     }
 }
