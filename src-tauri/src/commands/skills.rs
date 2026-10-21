@@ -3236,16 +3236,16 @@ pub fn resync_copy_targets(store: &SkillStore, skill_id: &str) -> Result<(), App
             continue;
         }
         // An update that changed no content leaves the copies alone.
-        if scenario_service::current_deployment_at(
+        if let Some(current) = scenario_service::current_deployment_at(
             &targets,
             skill_id,
             &source,
             Path::new(&target.target_path),
             sync_engine::SyncMode::Copy,
             skill.content_hash.as_deref(),
-        )
-        .is_some()
-        {
+        ) {
+            scenario_service::record_current_deployment(store, &targets, current, &target.tool)
+                .map_err(AppError::db)?;
             continue;
         }
 

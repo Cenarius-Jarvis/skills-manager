@@ -324,18 +324,28 @@ pub(crate) fn current_deployment_at<'a>(
         })
 }
 
-/// Record `tool`'s deployment at a path that `current`, a row for the same
-/// skill, shows is already in place. A no-op when `current` is `tool`'s own.
-fn record_shared_deployment(
+/// Record `tool`'s deployment at the path `current` shows is in place. Writing
+/// the row also brings the skill's other rows there in line with it (see
+/// [`SkillStore::insert_target`]), so nothing is written when they all agree.
+pub(crate) fn record_current_deployment(
     store: &SkillStore,
+    rows: &[SkillTargetRecord],
     current: &SkillTargetRecord,
     tool: &str,
 ) -> anyhow::Result<()> {
-    if current.tool == tool {
+    let at_path: Vec<&SkillTargetRecord> = rows
+        .iter()
+        .filter(|row| row.skill_id == current.skill_id && row.target_path == current.target_path)
+        .collect();
+    let in_line = |row: &&SkillTargetRecord| {
+        row.mode == current.mode && row.source_hash == current.source_hash
+    };
+    let own = at_path.iter().find(|row| row.tool == tool);
+    if own.is_some() && at_path.iter().all(in_line) {
         return Ok(());
     }
     store.insert_target(&SkillTargetRecord {
-        id: uuid::Uuid::new_v4().to_string(),
+        id: own.map_or_else(|| uuid::Uuid::new_v4().to_string(), |row| row.id.clone()),
         tool: tool.to_string(),
         synced_at: Some(chrono::Utc::now().timestamp_millis()),
         ..current.clone()
@@ -491,7 +501,7 @@ pub fn sync_desired_targets(
                     desired.tool
                 );
             }
-            if let Err(e) = record_shared_deployment(store, current, &desired.tool) {
+            if let Err(e) = record_current_deployment(store, &all_targets, current, &desired.tool) {
                 log::warn!(
                     "Failed to insert sync target for skill {}: {e}",
                     desired.skill_id
@@ -793,7 +803,9 @@ pub fn sync_skill_to_active_scenario(
                     mode,
                     skill.content_hash.as_deref(),
                 ) {
-                    if let Err(e) = record_shared_deployment(store, current, &adapter.key) {
+                    if let Err(e) =
+                        record_current_deployment(store, &old_targets, current, &adapter.key)
+                    {
                         log::warn!("Failed to insert sync target for skill {skill_id}: {e}");
                     }
                     continue;
@@ -1093,7 +1105,8 @@ pub fn sync_single_skill_to_tool(
             mode,
             skill.content_hash.as_deref(),
         ) {
-            record_shared_deployment(store, current, tool).map_err(AppError::db)?;
+            record_current_deployment(store, &existing_targets, current, tool)
+                .map_err(AppError::db)?;
             return Ok(());
         }
     }
@@ -1436,7 +1449,9 @@ fn apply_add(
                 *mode,
                 skill.content_hash.as_deref(),
             ) {
-                if let Err(e) = record_shared_deployment(store, current, tool_key) {
+                if let Err(e) =
+                    record_current_deployment(store, &existing_targets, current, tool_key)
+                {
                     log::warn!(
                         "apply_skills_to_tools: failed to insert target for skill {skill_id} / {tool_key}: {e}"
                     );

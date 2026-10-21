@@ -472,6 +472,20 @@ impl SkillStore {
                 target.source_hash,
             ],
         )?;
+        // Agents that share a skills directory each have a row for the one
+        // object there. A row left on an older hash would later vouch for
+        // rewriting it, so what was deployed is recorded on all of them.
+        conn.execute(
+            "UPDATE skill_targets SET mode = ?1, source_hash = ?2
+             WHERE skill_id = ?3 AND target_path = ?4 AND tool <> ?5",
+            params![
+                target.mode,
+                target.source_hash,
+                target.skill_id,
+                target.target_path,
+                target.tool,
+            ],
+        )?;
         Ok(())
     }
 

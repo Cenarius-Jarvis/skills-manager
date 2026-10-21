@@ -1177,7 +1177,9 @@ mod tests {
     }
 
     /// The two agents' rows at the shared path disagree: the first agent's is
-    /// current, the second one's still names an older library version.
+    /// current, the second one's still names an older library version. Rows
+    /// written by an older release can be left like this; `insert_target` no
+    /// longer leaves them so, hence the raw update.
     fn add_a_second_agent_with_a_stale_row(deployed: &MovedTool) {
         add_a_second_agent_sharing_the_directory(deployed);
         let first = deployed.store.get_targets_for_skill("a").unwrap().remove(0);
@@ -1186,9 +1188,16 @@ mod tests {
             .insert_target(&SkillTargetRecord {
                 id: "second".to_string(),
                 tool: "second_agent".to_string(),
-                source_hash: Some("an older library version".to_string()),
                 ..first
             })
+            .unwrap();
+        rusqlite::Connection::open(deployed._tmp.path().join("test.db"))
+            .unwrap()
+            .execute(
+                "UPDATE skill_targets SET source_hash = 'an older library version' \
+                 WHERE tool = 'second_agent'",
+                [],
+            )
             .unwrap();
     }
 
@@ -1207,6 +1216,72 @@ mod tests {
                 "{name} overwrote the edited copy"
             );
         }
+    }
+
+    /// What happens after the skip: the first agent is turned off, which keeps
+    /// the directory the second one still reads, and the second one syncs.
+    /// Its own row is all the evidence left, so it has to be current by now.
+    fn second_agent_syncs_alone(deployed: &MovedTool) {
+        unsync_all_for_tool(&deployed.store, "test_agent");
+        scenario_service::sync_single_skill_to_tool(
+            &deployed.store,
+            "a",
+            "second_agent",
+            scenario_service::DeployIntent::Managed,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_skip_brings_a_stale_row_on_the_shared_directory_up_to_date() {
+        for (name, resync) in RESYNCS {
+            let deployed = edited_copy();
+            add_a_second_agent_with_a_stale_row(&deployed);
+
+            resync(&deployed.store).unwrap();
+            second_agent_syncs_alone(&deployed);
+
+            assert!(
+                copy_still_edited(&deployed),
+                "after {name}, the second agent's sync overwrote the edited copy"
+            );
+        }
+    }
+
+    #[test]
+    fn a_write_on_the_shared_directory_brings_the_other_row_up_to_date() {
+        let deployed = edited_copy();
+        add_a_second_agent_sharing_the_directory(&deployed);
+        scenario_service::sync_skill_to_active_scenario(&deployed.store, "active", "a").unwrap();
+        let skill = deployed.store.get_skill_by_id("a").unwrap().unwrap();
+        fs::write(
+            Path::new(&skill.central_path).join("unique.txt"),
+            "library v2",
+        )
+        .unwrap();
+        set_library_hash(&deployed);
+
+        // Only the first agent's deployment is written; nothing else visits the
+        // second one's row.
+        scenario_service::sync_single_skill_to_tool(
+            &deployed.store,
+            "a",
+            "test_agent",
+            scenario_service::DeployIntent::Managed,
+        )
+        .unwrap();
+        fs::write(
+            deployed.old_copy.join("SKILL.md"),
+            "edited in the agent's copy",
+        )
+        .unwrap();
+        second_agent_syncs_alone(&deployed);
+
+        assert!(copy_still_edited(&deployed));
+        assert_eq!(
+            fs::read_to_string(deployed.old_copy.join("unique.txt")).unwrap(),
+            "library v2"
+        );
     }
 
     /// Deploying to the second agent must not report success when its record
