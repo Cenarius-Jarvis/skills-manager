@@ -15,7 +15,7 @@ use crate::core::{
     install_cancel::InstallCancelRegistry,
     installer, path_guard,
     repo_lock::RepoLock,
-    scanner,
+    scanner, scenario_service,
     skill_metadata::{self, is_valid_skill_dir},
     skill_store::{SkillRecord, SkillStore, SkillTargetRecord},
     sync_engine, sync_metadata,
@@ -3233,6 +3233,16 @@ pub fn resync_copy_targets(store: &SkillStore, skill_id: &str) -> Result<(), App
 
     for target in targets {
         if target.mode != "copy" {
+            continue;
+        }
+        // An update that changed no content leaves the copies alone.
+        if scenario_service::recorded_target_is_current(
+            Some(&target),
+            &source,
+            Path::new(&target.target_path),
+            sync_engine::SyncMode::Copy,
+            skill.content_hash.as_deref(),
+        ) {
             continue;
         }
 
