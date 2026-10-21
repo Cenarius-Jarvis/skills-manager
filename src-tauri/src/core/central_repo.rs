@@ -1021,7 +1021,10 @@ mod tests {
             fs::write(target.join(".DS_Store"), b"").unwrap();
             target
         });
-        assert!(saved.is_ok() && moved, "OS debris alone does not block the move");
+        assert!(
+            saved.is_ok() && moved,
+            "OS debris alone does not block the move"
+        );
 
         let (saved, moved) = verdicts(|_, dst| {
             let target = dst.join("lib");
@@ -1031,14 +1034,23 @@ mod tests {
         });
         assert!(!moved, "fixture: the migration refuses a non-empty target");
         assert!(
-            saved.unwrap_err().to_string().starts_with(REPO_TARGET_NOT_EMPTY),
+            saved
+                .unwrap_err()
+                .to_string()
+                .starts_with(REPO_TARGET_NOT_EMPTY),
             "saving must refuse it too"
         );
 
         let (saved, moved) = verdicts(|src, _| src.join("nested"));
-        assert!(!moved, "fixture: the migration refuses a target inside the library");
         assert!(
-            saved.unwrap_err().to_string().starts_with(REPO_TARGET_INSIDE_LIBRARY),
+            !moved,
+            "fixture: the migration refuses a target inside the library"
+        );
+        assert!(
+            saved
+                .unwrap_err()
+                .to_string()
+                .starts_with(REPO_TARGET_INSIDE_LIBRARY),
             "saving must refuse it too"
         );
     }
