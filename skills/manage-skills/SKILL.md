@@ -133,7 +133,7 @@ Each result has `install_ref` (paste straight into `skills install`), `installs`
 "$SM" skills check --all
 ```
 
-`check` is the dry-run partner of `update`. Local-only skills (no git source) are reported as `skipped: true`.
+`check` is the dry-run partner of `update`. A skill installed from a local folder is compared with that folder, not with any Git remote: `update_available` means the folder changed since it was imported, and `source_missing` means the folder is gone. Website skills have nothing to compare against and come back `skipped: true`.
 
 **An update replaces the skill's directory wholesale**, so anything written inside it that the new version does not have would be destroyed. When the CLI detects that, it applies nothing and reports the paths instead:
 
