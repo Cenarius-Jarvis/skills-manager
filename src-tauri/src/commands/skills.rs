@@ -3231,21 +3231,18 @@ pub fn resync_copy_targets(store: &SkillStore, skill_id: &str) -> Result<(), App
         .get_targets_for_skill(skill_id)
         .map_err(AppError::db)?;
 
-    for target in targets.iter().cloned() {
+    for target in targets {
         if target.mode != "copy" {
             continue;
         }
         // An update that changed no content leaves the copies alone.
-        if let Some(current) = scenario_service::current_deployment_at(
-            &targets,
-            skill_id,
+        if scenario_service::recorded_target_is_current(
+            Some(&target),
             &source,
             Path::new(&target.target_path),
             sync_engine::SyncMode::Copy,
             skill.content_hash.as_deref(),
         ) {
-            scenario_service::record_current_deployment(store, &targets, current, &target.tool)
-                .map_err(AppError::db)?;
             continue;
         }
 
