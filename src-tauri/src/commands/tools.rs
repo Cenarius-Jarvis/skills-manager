@@ -1061,15 +1061,15 @@ mod tests {
             == "edited in the agent's copy"
     }
 
-    type Resync = fn(&SkillStore);
+    type Resync = fn(&SkillStore) -> Result<(), AppError>;
 
     /// Every way the app re-syncs one skill to an agent that already has it.
     const RESYNCS: [(&str, Resync); 5] = [
         ("full sync", |store| {
-            scenario_service::sync_scenario_skills(store, "active").unwrap();
+            scenario_service::sync_scenario_skills(store, "active").map(drop)
         }),
         ("single skill to the active preset", |store| {
-            scenario_service::sync_skill_to_active_scenario(store, "active", "a").unwrap();
+            scenario_service::sync_skill_to_active_scenario(store, "active", "a")
         }),
         ("single skill to one agent", |store| {
             scenario_service::sync_single_skill_to_tool(
@@ -1078,7 +1078,6 @@ mod tests {
                 "test_agent",
                 scenario_service::DeployIntent::Managed,
             )
-            .unwrap();
         }),
         ("batch deploy", |store| {
             scenario_service::apply_skills_to_tools(
@@ -1087,10 +1086,9 @@ mod tests {
                 &["test_agent".to_string()],
                 scenario_service::BatchApplyMode::Add,
             )
-            .unwrap();
         }),
         ("copies after an update", |store| {
-            crate::commands::skills::resync_copy_targets(store, "a").unwrap();
+            crate::commands::skills::resync_copy_targets(store, "a")
         }),
     ];
 
@@ -1101,11 +1099,105 @@ mod tests {
     fn a_resync_leaves_an_edited_copy_alone_while_the_library_is_unchanged() {
         for (name, resync) in RESYNCS {
             let deployed = edited_copy();
-            resync(&deployed.store);
+            resync(&deployed.store).unwrap();
             assert!(
                 copy_still_edited(&deployed),
                 "{name} overwrote the edited copy"
             );
+        }
+    }
+
+    /// A second agent that reads the same skills directory (amp and replit
+    /// share one) is set up after the first one already has the edited copy.
+    fn add_a_second_agent_sharing_the_directory(deployed: &MovedTool) {
+        let tool = |key: &str| CustomToolDef {
+            key: key.to_string(),
+            display_name: key.to_string(),
+            skills_dir: deployed.old_base.to_string_lossy().to_string(),
+            project_relative_skills_dir: None,
+            category: Default::default(),
+        };
+        deployed
+            .store
+            .set_setting(
+                "custom_tools",
+                &serde_json::to_string(&[tool("test_agent"), tool("second_agent")]).unwrap(),
+            )
+            .unwrap();
+    }
+
+    /// Every way the second agent gets the skill.
+    const SECOND_AGENT_DEPLOYS: [(&str, Resync); 4] = [
+        ("full sync", |store| {
+            scenario_service::sync_scenario_skills(store, "active").map(drop)
+        }),
+        ("single skill to the active preset", |store| {
+            scenario_service::sync_skill_to_active_scenario(store, "active", "a")
+        }),
+        ("single skill to one agent", |store| {
+            scenario_service::sync_single_skill_to_tool(
+                store,
+                "a",
+                "second_agent",
+                scenario_service::DeployIntent::Managed,
+            )
+        }),
+        ("batch deploy", |store| {
+            scenario_service::apply_skills_to_tools(
+                store,
+                &["a".to_string()],
+                &["second_agent".to_string()],
+                scenario_service::BatchApplyMode::Add,
+            )
+        }),
+    ];
+
+    #[test]
+    fn deploying_to_a_second_agent_on_a_shared_directory_keeps_the_edited_copy() {
+        for (name, deploy) in SECOND_AGENT_DEPLOYS {
+            let deployed = edited_copy();
+            add_a_second_agent_sharing_the_directory(&deployed);
+
+            deploy(&deployed.store).unwrap();
+
+            assert!(
+                copy_still_edited(&deployed),
+                "{name} overwrote the edited copy"
+            );
+            let second = deployed
+                .store
+                .get_targets_for_skill("a")
+                .unwrap()
+                .into_iter()
+                .find(|target| target.tool == "second_agent")
+                .unwrap_or_else(|| panic!("{name} did not record the second agent"));
+            assert_eq!(PathBuf::from(&second.target_path), deployed.old_copy);
+            assert_eq!(second.mode, "copy");
+        }
+    }
+
+    /// A copy is only current while it is still a directory. Whatever the user
+    /// put in its place stays, and deploying over it is refused.
+    #[test]
+    fn a_file_in_place_of_the_copy_is_not_taken_for_a_current_copy() {
+        for (name, resync) in RESYNCS {
+            let deployed = edited_copy();
+            fs::remove_dir_all(&deployed.old_copy).unwrap();
+            fs::write(&deployed.old_copy, "the user's file").unwrap();
+
+            let result = resync(&deployed.store);
+
+            assert_eq!(
+                fs::read_to_string(&deployed.old_copy).unwrap(),
+                "the user's file",
+                "{name} replaced the user's file"
+            );
+            if name == "single skill to one agent" {
+                assert!(
+                    result.is_err(),
+                    "{name} reported success over the user's file"
+                );
+            }
         }
     }
 
@@ -1121,7 +1213,7 @@ mod tests {
             .unwrap();
             set_library_hash(&deployed);
 
-            resync(&deployed.store);
+            resync(&deployed.store).unwrap();
 
             assert_eq!(
                 fs::read_to_string(deployed.old_copy.join("unique.txt")).unwrap(),

@@ -272,9 +272,9 @@ fn single_dir_name(key: &str) -> String {
     }
 }
 
-/// Whether the deployment recorded at exactly this path is still current, so a
-/// resync can leave it alone: a link to the source, or a copy deployed from the
-/// library's current content hash (#153).
+/// The skill's deployment already at `target`, if it is still current, so a
+/// resync can leave it alone: a link to the source, or a real directory copied
+/// from the library's current content hash (#153).
 ///
 /// [`sync_engine::sync_skill`] rewrites a recorded copy wholesale. Only the
 /// startup and preset sync asked this first, so every other resync (a preset
@@ -282,26 +282,70 @@ fn single_dir_name(key: &str) -> String {
 /// update that changed no content) deleted whatever had been written into the
 /// agent's copy although the library had not changed. Skipping never deletes
 /// anything, so every resync can ask.
-pub(crate) fn recorded_target_is_current(
-    record: Option<&SkillTargetRecord>,
+///
+/// Any of the skill's rows at this path vouches, not only the calling tool's:
+/// agents can share a skills directory, and deploying to the second one must
+/// not rewrite the copy the first one reads. Rows that disagree vouch for
+/// nothing. A copy that is no longer a real directory is not current either,
+/// so `sync_skill` still gets to refuse whatever replaced it.
+pub(crate) fn current_deployment_at<'a>(
+    rows: &'a [SkillTargetRecord],
+    skill_id: &str,
     source: &Path,
     target: &Path,
     desired: sync_engine::SyncMode,
     library_hash: Option<&str>,
-) -> bool {
-    let Some(record) = record.filter(|record| record.status == "ok") else {
-        return false;
-    };
-    let Some(check_mode) = skip_check_mode(&record.mode, desired) else {
-        return false;
-    };
+) -> Option<&'a SkillTargetRecord> {
+    let mut at_path = rows
+        .iter()
+        .filter(|row| row.skill_id == skill_id && Path::new(&row.target_path) == target);
+    let first = at_path.next()?;
+    if at_path.any(|row| {
+        row.mode != first.mode || row.source_hash != first.source_hash || row.status != first.status
+    }) {
+        return None;
+    }
+    if first.status != "ok" {
+        return None;
+    }
+    let check_mode = skip_check_mode(&first.mode, desired)?;
+    if matches!(check_mode, sync_engine::SyncMode::Copy)
+        && !matches!(
+            sync_engine::classify_target(target, None),
+            Ok(sync_engine::TargetState::RealDir)
+        )
+    {
+        return None;
+    }
     sync_engine::is_target_current(
         source,
         target,
         check_mode,
-        record.source_hash.as_deref(),
+        first.source_hash.as_deref(),
         library_hash,
     )
+    .then_some(first)
+}
+
+/// Record `tool`'s deployment at a path that `current`, another tool's row for
+/// the same skill, shows is already in place.
+fn record_shared_deployment(store: &SkillStore, current: &SkillTargetRecord, tool: &str) {
+    if current.tool == tool {
+        return;
+    }
+    let record = SkillTargetRecord {
+        id: uuid::Uuid::new_v4().to_string(),
+        tool: tool.to_string(),
+        synced_at: Some(chrono::Utc::now().timestamp_millis()),
+        ..current.clone()
+    };
+    if let Err(e) = store.insert_target(&record) {
+        log::warn!(
+            "Failed to record {tool}'s deployment of skill {} at {}: {e}",
+            current.skill_id,
+            current.target_path
+        );
+    }
 }
 
 /// A key identifying the *directory entry* a target path names, used to spot
@@ -374,11 +418,15 @@ pub fn sync_desired_targets(
     desired_targets: &[ScenarioSyncTarget],
 ) -> Result<Vec<TargetConflict>, AppError> {
     let batch_start = Instant::now();
-    let existing_targets: HashMap<(String, String), SkillTargetRecord> = store
-        .get_all_targets()
-        .map_err(AppError::db)?
-        .into_iter()
-        .map(|target| ((target.skill_id.clone(), target.tool.clone()), target))
+    let all_targets = store.get_all_targets().map_err(AppError::db)?;
+    let existing_targets: HashMap<(String, String), SkillTargetRecord> = all_targets
+        .iter()
+        .map(|target| {
+            (
+                (target.skill_id.clone(), target.tool.clone()),
+                target.clone(),
+            )
+        })
         .collect();
 
     let mut synced_count = 0usize;
@@ -426,30 +474,32 @@ pub fn sync_desired_targets(
                         desired.tool
                     );
                 }
-            } else if recorded_target_is_current(
-                Some(existing),
-                &desired.source,
-                &desired.target,
-                desired.mode,
-                desired.source_hash.as_deref(),
-            ) {
-                // Surface the Windows fallback case in logs so operators
-                // can tell when a target is permanently on Copy because
-                // an earlier symlink_dir() failed (issue #153). Helpful
-                // when a user later enables Developer Mode and wonders
-                // why Symlink isn't being re-attempted.
-                if existing.mode == "copy" && matches!(desired.mode, sync_engine::SyncMode::Symlink)
-                {
-                    log::debug!(
-                        "sync_desired_targets: skill {} ({}) staying on copy fallback for {} (content unchanged); redeploy the skill to retry symlink",
-                        desired.skill_id,
-                        desired.skill_name,
-                        desired.tool
-                    );
-                }
-                skipped_count += 1;
-                continue;
             }
+        }
+        if let Some(current) = current_deployment_at(
+            &all_targets,
+            &desired.skill_id,
+            &desired.source,
+            &desired.target,
+            desired.mode,
+            desired.source_hash.as_deref(),
+        ) {
+            // Surface the Windows fallback case in logs so operators
+            // can tell when a target is permanently on Copy because
+            // an earlier symlink_dir() failed (issue #153). Helpful
+            // when a user later enables Developer Mode and wonders
+            // why Symlink isn't being re-attempted.
+            if current.mode == "copy" && matches!(desired.mode, sync_engine::SyncMode::Symlink) {
+                log::debug!(
+                    "sync_desired_targets: skill {} ({}) staying on copy fallback for {} (content unchanged); redeploy the skill to retry symlink",
+                    desired.skill_id,
+                    desired.skill_name,
+                    desired.tool
+                );
+            }
+            record_shared_deployment(store, current, &desired.tool);
+            skipped_count += 1;
+            continue;
         }
 
         match sync_engine::sync_skill(
@@ -736,16 +786,15 @@ pub fn sync_skill_to_active_scenario(
                 }
 
                 let mode = sync_engine::sync_mode_for_tool(&adapter.key, configured_mode.as_deref());
-                let same_path_record = old_targets.iter().find(|old| {
-                    old.tool == adapter.key && PathBuf::from(&old.target_path) == target
-                });
-                if recorded_target_is_current(
-                    same_path_record,
+                if let Some(current) = current_deployment_at(
+                    &old_targets,
+                    skill_id,
                     &source,
                     &target,
                     mode,
                     skill.content_hash.as_deref(),
                 ) {
+                    record_shared_deployment(store, current, &adapter.key);
                     continue;
                 }
                 match sync_engine::sync_skill(
@@ -1035,16 +1084,15 @@ pub fn sync_single_skill_to_tool(
         detach_source_refs_from_adoption_target(store, &target)?;
     }
     if matches!(intent, DeployIntent::Managed) {
-        let same_path_record = existing_targets.iter().find(|existing| {
-            existing.tool == tool && PathBuf::from(&existing.target_path) == target
-        });
-        if recorded_target_is_current(
-            same_path_record,
+        if let Some(current) = current_deployment_at(
+            &existing_targets,
+            skill_id,
             &source,
             &target,
             mode,
             skill.content_hash.as_deref(),
         ) {
+            record_shared_deployment(store, current, tool);
             return Ok(());
         }
     }
@@ -1377,20 +1425,17 @@ fn apply_add(
             .get(target.as_path())
             .map(String::as_str)
             .or_else(|| evidence_for(target, &mut key_memo));
-        // What this batch just wrote at a shared path is not this pair's record.
+        // The rows predate this batch, so they say nothing about a path it wrote.
         if !written_in_batch.contains_key(target.as_path()) {
-            let own_record = existing_targets.iter().find(|row| {
-                row.skill_id == *skill_id
-                    && row.tool == *tool_key
-                    && Path::new(&row.target_path) == target
-            });
-            if recorded_target_is_current(
-                own_record,
+            if let Some(current) = current_deployment_at(
+                &existing_targets,
+                skill_id,
                 source,
                 target,
                 *mode,
                 skill.content_hash.as_deref(),
             ) {
+                record_shared_deployment(store, current, tool_key);
                 left += 1;
                 continue;
             }
