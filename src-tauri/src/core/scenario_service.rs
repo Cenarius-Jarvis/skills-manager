@@ -233,7 +233,9 @@ pub(crate) fn release_abandoned_target(path: &Path, recorded_mode: &str, tool: &
 /// A rename only, so nothing is copied half-way; across volumes it fails and
 /// the caller keeps the copy where it is.
 fn move_into_kept_copies(path: &Path, tool: &str) -> std::io::Result<PathBuf> {
-    let root = central_repo::base_dir().join("kept-copies").join(tool);
+    let root = central_repo::base_dir()
+        .join("kept-copies")
+        .join(single_dir_name(tool));
     std::fs::create_dir_all(&root)?;
     let name = path
         .file_name()
@@ -241,12 +243,33 @@ fn move_into_kept_copies(path: &Path, tool: &str) -> std::io::Result<PathBuf> {
         .unwrap_or_else(|| "skill".to_string());
     let mut kept = root.join(&name);
     let mut n = 2;
-    while kept.exists() {
+    // `symlink_metadata`, not `exists`: a dangling link still takes the name.
+    while std::fs::symlink_metadata(&kept).is_ok() {
         kept = root.join(format!("{name}-{n}"));
         n += 1;
     }
     std::fs::rename(path, &kept)?;
     Ok(kept)
+}
+
+/// A tool key as one directory name. Custom keys reach here unchecked from
+/// the CLI, so a key like `../skills` must not lead outside `kept-copies/`.
+fn single_dir_name(key: &str) -> String {
+    let name: String = key
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if name.is_empty() {
+        "tool".to_string()
+    } else {
+        name
+    }
 }
 
 /// A key identifying the *directory entry* a target path names, used to spot
@@ -1591,6 +1614,45 @@ mod sync_desired_targets_tests {
         central_repo::set_test_base_dir_override(None);
     }
 
+
+    /// Kept copies land under `kept-copies/`, whatever the tool key looks
+    /// like, and never on top of an earlier one, dangling links included.
+    #[test]
+    fn kept_copies_stay_inside_kept_copies_and_never_collide() {
+        let _lock = central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        let library = tmp.path().join("library");
+        central_repo::set_test_base_dir_override(Some(library.clone()));
+        let make_copy = |dir: &str| {
+            let path = tmp.path().join(dir).join("skill-a");
+            fs::create_dir_all(&path).unwrap();
+            fs::write(path.join("notes.md"), dir).unwrap();
+            path
+        };
+
+        // A CLI-created key with path syntax in it.
+        let first = make_copy("agent-1");
+        release_abandoned_target(&first, "copy", "../skills");
+        let kept_root = library.join("kept-copies").join("___skills");
+        assert_eq!(
+            fs::read_to_string(kept_root.join("skill-a/notes.md")).unwrap(),
+            "agent-1"
+        );
+        assert!(!library.join("skills").exists(), "escaped kept-copies/");
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(tmp.path().join("gone"), kept_root.join("skill-a-2")).unwrap();
+        let second = make_copy("agent-2");
+        release_abandoned_target(&second, "copy", "../skills");
+        assert!(!second.exists(), "the second copy was not moved");
+        let landed = if cfg!(unix) { "skill-a-3" } else { "skill-a-2" };
+        assert_eq!(
+            fs::read_to_string(kept_root.join(landed).join("notes.md")).unwrap(),
+            "agent-2"
+        );
+
+        central_repo::set_test_base_dir_override(None);
+    }
 
     /// Startup must survive a collision. `ensure_default_startup_scenario`
     /// reaches this function through `sync_scenario_skills`, and its caller
