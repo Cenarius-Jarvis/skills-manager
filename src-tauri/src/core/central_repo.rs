@@ -417,6 +417,13 @@ pub fn set_base_dir_override(path: Option<String>) -> Result<PathBuf> {
     } else {
         None
     };
+    // Refuse now a move the next launch would refuse anyway: the app would
+    // keep using the old library, and the user would only see that the path
+    // "didn't change" after restarting (#509, #541).
+    if data_location.is_dir() && !paths_are_same_dir(&data_location, &next) {
+        check_migration_target(&data_location, &next)?;
+    }
+
     config.pending_migration_from = if next != data_location {
         Some(data_location.to_string_lossy().to_string())
     } else {
@@ -424,6 +431,30 @@ pub fn set_base_dir_override(path: Option<String>) -> Result<PathBuf> {
     };
     save_config(&config)?;
     Ok(next)
+}
+
+/// Error prefixes the Settings page maps to localized messages.
+pub const REPO_TARGET_INSIDE_LIBRARY: &str = "REPO_TARGET_INSIDE_LIBRARY";
+pub const REPO_TARGET_NOT_EMPTY: &str = "REPO_TARGET_NOT_EMPTY";
+
+/// The checks [`migrate_repo_if_needed`] makes before it moves the library,
+/// run when the new path is saved. Leftovers the migration clears on its own
+/// are accepted here, not removed. Passing does not promise the move will
+/// succeed: the folder can still change before the next launch.
+fn check_migration_target(source: &Path, target: &Path) -> Result<()> {
+    if target.starts_with(source) {
+        anyhow::bail!("{REPO_TARGET_INSIDE_LIBRARY}: {}", target.display());
+    }
+    // Absent is fine: the migration creates it.
+    if !target.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(target)? {
+        if !is_regenerable(&entry?.path(), target) {
+            anyhow::bail!("{REPO_TARGET_NOT_EMPTY}: {}", target.display());
+        }
+    }
+    Ok(())
 }
 
 fn directory_has_entries(path: &Path) -> Result<bool> {
@@ -960,6 +991,56 @@ mod tests {
         assert_eq!(config.pending_migration_from, None);
         assert!(config.repoint_from.is_some());
         assert_eq!(fs::read(dst.join("a.txt")).unwrap(), b"src");
+    }
+
+    /// Saving a new path and moving the library at the next launch must agree
+    /// on every target. Otherwise the user is told "saved" for a path that
+    /// will never take effect (#509, #541), or refused one that would have.
+    #[test]
+    fn the_save_time_check_agrees_with_the_startup_migration() {
+        fn verdicts(make_target: impl Fn(&Path, &Path) -> PathBuf) -> (Result<()>, bool) {
+            let src = tempfile::tempdir().unwrap();
+            let dst = tempfile::tempdir().unwrap();
+            fs::write(src.path().join("a.txt"), b"src").unwrap();
+            let target = make_target(src.path(), dst.path());
+            let saved = check_migration_target(src.path(), &target);
+            let mut config = config_migrating(src.path(), &target);
+            let moved = matches!(
+                migrate_repo_if_needed(&mut config, &target),
+                MigrationOutcome::Proceed
+            );
+            (saved, moved)
+        }
+
+        let (saved, moved) = verdicts(|_, dst| dst.join("lib"));
+        assert!(saved.is_ok() && moved, "an absent target is fine");
+
+        let (saved, moved) = verdicts(|_, dst| {
+            let target = dst.join("lib");
+            fs::create_dir_all(&target).unwrap();
+            fs::write(target.join(".DS_Store"), b"").unwrap();
+            target
+        });
+        assert!(saved.is_ok() && moved, "OS debris alone does not block the move");
+
+        let (saved, moved) = verdicts(|_, dst| {
+            let target = dst.join("lib");
+            fs::create_dir_all(&target).unwrap();
+            fs::write(target.join("notes.txt"), b"mine").unwrap();
+            target
+        });
+        assert!(!moved, "fixture: the migration refuses a non-empty target");
+        assert!(
+            saved.unwrap_err().to_string().starts_with(REPO_TARGET_NOT_EMPTY),
+            "saving must refuse it too"
+        );
+
+        let (saved, moved) = verdicts(|src, _| src.join("nested"));
+        assert!(!moved, "fixture: the migration refuses a target inside the library");
+        assert!(
+            saved.unwrap_err().to_string().starts_with(REPO_TARGET_INSIDE_LIBRARY),
+            "saving must refuse it too"
+        );
     }
 
     #[test]
