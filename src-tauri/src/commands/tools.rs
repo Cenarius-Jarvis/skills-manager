@@ -1176,6 +1176,67 @@ mod tests {
         }
     }
 
+    /// The two agents' rows at the shared path disagree: the first agent's is
+    /// current, the second one's still names an older library version.
+    fn add_a_second_agent_with_a_stale_row(deployed: &MovedTool) {
+        add_a_second_agent_sharing_the_directory(deployed);
+        let first = deployed.store.get_targets_for_skill("a").unwrap().remove(0);
+        deployed
+            .store
+            .insert_target(&SkillTargetRecord {
+                id: "second".to_string(),
+                tool: "second_agent".to_string(),
+                source_hash: Some("an older library version".to_string()),
+                ..first
+            })
+            .unwrap();
+    }
+
+    /// One current row is enough: a stale row next to it must not turn the
+    /// first agent's own resync into a rewrite of the edited copy.
+    #[test]
+    fn a_stale_row_on_a_shared_directory_does_not_get_the_edited_copy_rewritten() {
+        for (name, resync) in RESYNCS {
+            let deployed = edited_copy();
+            add_a_second_agent_with_a_stale_row(&deployed);
+
+            resync(&deployed.store).unwrap();
+
+            assert!(
+                copy_still_edited(&deployed),
+                "{name} overwrote the edited copy"
+            );
+        }
+    }
+
+    /// Deploying to the second agent must not report success when its record
+    /// could not be written.
+    #[test]
+    fn a_failed_record_for_the_second_agent_is_reported() {
+        let deployed = edited_copy();
+        add_a_second_agent_sharing_the_directory(&deployed);
+        rusqlite::Connection::open(deployed._tmp.path().join("test.db"))
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER refuse_second BEFORE INSERT ON skill_targets \
+                 WHEN NEW.tool = 'second_agent' BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+            )
+            .unwrap();
+
+        let result = scenario_service::sync_single_skill_to_tool(
+            &deployed.store,
+            "a",
+            "second_agent",
+            scenario_service::DeployIntent::Managed,
+        );
+
+        assert!(
+            result.is_err(),
+            "deploying without a record reported success"
+        );
+        assert!(copy_still_edited(&deployed));
+    }
+
     /// A copy is only current while it is still a directory. Whatever the user
     /// put in its place stays, and deploying over it is refused.
     #[test]

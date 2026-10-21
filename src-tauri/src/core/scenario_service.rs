@@ -285,9 +285,11 @@ fn single_dir_name(key: &str) -> String {
 ///
 /// Any of the skill's rows at this path vouches, not only the calling tool's:
 /// agents can share a skills directory, and deploying to the second one must
-/// not rewrite the copy the first one reads. Rows that disagree vouch for
-/// nothing. A copy that is no longer a real directory is not current either,
-/// so `sync_skill` still gets to refuse whatever replaced it.
+/// not rewrite the copy the first one reads. One current row is enough even
+/// when another row there is stale, because a wrong skip only delays an
+/// update while a wrong write deletes edits. A copy that is no longer a real
+/// directory is not current, so `sync_skill` still gets to refuse whatever
+/// replaced it.
 pub(crate) fn current_deployment_at<'a>(
     rows: &'a [SkillTargetRecord],
     skill_id: &str,
@@ -296,56 +298,48 @@ pub(crate) fn current_deployment_at<'a>(
     desired: sync_engine::SyncMode,
     library_hash: Option<&str>,
 ) -> Option<&'a SkillTargetRecord> {
-    let mut at_path = rows
-        .iter()
-        .filter(|row| row.skill_id == skill_id && Path::new(&row.target_path) == target);
-    let first = at_path.next()?;
-    if at_path.any(|row| {
-        row.mode != first.mode || row.source_hash != first.source_hash || row.status != first.status
-    }) {
-        return None;
-    }
-    if first.status != "ok" {
-        return None;
-    }
-    let check_mode = skip_check_mode(&first.mode, desired)?;
-    if matches!(check_mode, sync_engine::SyncMode::Copy)
-        && !matches!(
-            sync_engine::classify_target(target, None),
-            Ok(sync_engine::TargetState::RealDir)
-        )
-    {
-        return None;
-    }
-    sync_engine::is_target_current(
-        source,
-        target,
-        check_mode,
-        first.source_hash.as_deref(),
-        library_hash,
-    )
-    .then_some(first)
+    rows.iter()
+        .filter(|row| {
+            row.skill_id == skill_id && Path::new(&row.target_path) == target && row.status == "ok"
+        })
+        .find(|row| {
+            let Some(check_mode) = skip_check_mode(&row.mode, desired) else {
+                return false;
+            };
+            if matches!(check_mode, sync_engine::SyncMode::Copy)
+                && !matches!(
+                    sync_engine::classify_target(target, None),
+                    Ok(sync_engine::TargetState::RealDir)
+                )
+            {
+                return false;
+            }
+            sync_engine::is_target_current(
+                source,
+                target,
+                check_mode,
+                row.source_hash.as_deref(),
+                library_hash,
+            )
+        })
 }
 
-/// Record `tool`'s deployment at a path that `current`, another tool's row for
-/// the same skill, shows is already in place.
-fn record_shared_deployment(store: &SkillStore, current: &SkillTargetRecord, tool: &str) {
+/// Record `tool`'s deployment at a path that `current`, a row for the same
+/// skill, shows is already in place. A no-op when `current` is `tool`'s own.
+fn record_shared_deployment(
+    store: &SkillStore,
+    current: &SkillTargetRecord,
+    tool: &str,
+) -> anyhow::Result<()> {
     if current.tool == tool {
-        return;
+        return Ok(());
     }
-    let record = SkillTargetRecord {
+    store.insert_target(&SkillTargetRecord {
         id: uuid::Uuid::new_v4().to_string(),
         tool: tool.to_string(),
         synced_at: Some(chrono::Utc::now().timestamp_millis()),
         ..current.clone()
-    };
-    if let Err(e) = store.insert_target(&record) {
-        log::warn!(
-            "Failed to record {tool}'s deployment of skill {} at {}: {e}",
-            current.skill_id,
-            current.target_path
-        );
-    }
+    })
 }
 
 /// A key identifying the *directory entry* a target path names, used to spot
@@ -497,7 +491,12 @@ pub fn sync_desired_targets(
                     desired.tool
                 );
             }
-            record_shared_deployment(store, current, &desired.tool);
+            if let Err(e) = record_shared_deployment(store, current, &desired.tool) {
+                log::warn!(
+                    "Failed to insert sync target for skill {}: {e}",
+                    desired.skill_id
+                );
+            }
             skipped_count += 1;
             continue;
         }
@@ -794,7 +793,9 @@ pub fn sync_skill_to_active_scenario(
                     mode,
                     skill.content_hash.as_deref(),
                 ) {
-                    record_shared_deployment(store, current, &adapter.key);
+                    if let Err(e) = record_shared_deployment(store, current, &adapter.key) {
+                        log::warn!("Failed to insert sync target for skill {skill_id}: {e}");
+                    }
                     continue;
                 }
                 match sync_engine::sync_skill(
@@ -1092,7 +1093,7 @@ pub fn sync_single_skill_to_tool(
             mode,
             skill.content_hash.as_deref(),
         ) {
-            record_shared_deployment(store, current, tool);
+            record_shared_deployment(store, current, tool).map_err(AppError::db)?;
             return Ok(());
         }
     }
@@ -1435,8 +1436,14 @@ fn apply_add(
                 *mode,
                 skill.content_hash.as_deref(),
             ) {
-                record_shared_deployment(store, current, tool_key);
-                left += 1;
+                if let Err(e) = record_shared_deployment(store, current, tool_key) {
+                    log::warn!(
+                        "apply_skills_to_tools: failed to insert target for skill {skill_id} / {tool_key}: {e}"
+                    );
+                    failed += 1;
+                } else {
+                    left += 1;
+                }
                 continue;
             }
         }
