@@ -496,15 +496,18 @@ export function Settings() {
     }
   };
 
-  // The backend refuses a move the next launch could not make, prefixing the
-  // reason with a code and ending with the folder (`central_repo.rs`).
+  // The backend refuses a move the next launch could not make as
+  // "<CODE>: <folder>" (`central_repo.rs`). Match the code exactly: the folder
+  // name itself may contain either code.
   const centralRepoPathError = (error: unknown) => {
     const message = getErrorMessage(error, t("common.error"));
-    const path = compactHomePath(message.slice(message.indexOf(":") + 1).trim());
-    if (message.includes("REPO_TARGET_NOT_EMPTY")) {
+    const separator = message.indexOf(": ");
+    const code = separator === -1 ? "" : message.slice(0, separator);
+    const path = compactHomePath(message.slice(separator + 2));
+    if (code === "REPO_TARGET_NOT_EMPTY") {
       return t("settings.repoPathTargetNotEmpty", { path });
     }
-    if (message.includes("REPO_TARGET_INSIDE_LIBRARY")) {
+    if (code === "REPO_TARGET_INSIDE_LIBRARY") {
       return t("settings.repoPathTargetInsideLibrary", { path });
     }
     return message;
