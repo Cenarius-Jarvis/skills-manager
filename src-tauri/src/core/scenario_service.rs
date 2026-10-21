@@ -286,7 +286,7 @@ fn single_dir_name(key: &str) -> String {
 /// Only the calling tool's own row counts. Rows of other tools sharing the
 /// directory are history of their own deployments, and the removal paths rely
 /// on their disagreeing to keep a directory whose owner is unclear. A copy
-/// that is no longer a real directory is not current, so `sync_skill` still
+/// replaced by a file or a foreign link is not current, so `sync_skill` still
 /// gets to refuse whatever replaced it.
 pub(crate) fn recorded_target_is_current(
     record: Option<&SkillTargetRecord>,
@@ -301,10 +301,12 @@ pub(crate) fn recorded_target_is_current(
     let Some(check_mode) = skip_check_mode(&record.mode, desired) else {
         return false;
     };
+    // A link to the source serves the library's content too; anything else
+    // in place of the copy goes to `sync_skill`, which refuses it.
     if matches!(check_mode, sync_engine::SyncMode::Copy)
         && !matches!(
-            sync_engine::classify_target(target, None),
-            Ok(sync_engine::TargetState::RealDir)
+            sync_engine::classify_target(target, Some(source)),
+            Ok(sync_engine::TargetState::RealDir | sync_engine::TargetState::LinkToSource)
         )
     {
         return false;
@@ -455,7 +457,7 @@ pub fn sync_desired_targets(
                 if existing.mode == "copy" && matches!(desired.mode, sync_engine::SyncMode::Symlink)
                 {
                     log::debug!(
-                        "sync_desired_targets: skill {} ({}) staying on copy fallback for {} (content unchanged); redeploy the skill to retry symlink",
+                        "sync_desired_targets: skill {} ({}) staying on copy fallback for {} (content unchanged); undeploy and deploy the skill again to retry symlink",
                         desired.skill_id,
                         desired.skill_name,
                         desired.tool

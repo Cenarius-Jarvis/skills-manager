@@ -1107,8 +1107,32 @@ mod tests {
         }
     }
 
-    /// A copy is only current while it is still a directory. Whatever the user
-    /// put in its place stays, and deploying over it is refused.
+    /// The user swapped the copy for a link to the library. That serves the
+    /// same content, so the link is left as it is, as `main` did.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_the_library_in_place_of_the_copy_is_left_alone() {
+        for (name, resync) in RESYNCS {
+            let deployed = edited_copy();
+            let skill = deployed.store.get_skill_by_id("a").unwrap().unwrap();
+            fs::remove_dir_all(&deployed.old_copy).unwrap();
+            std::os::unix::fs::symlink(&skill.central_path, &deployed.old_copy).unwrap();
+
+            resync(&deployed.store).unwrap();
+
+            assert!(
+                fs::symlink_metadata(&deployed.old_copy)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink(),
+                "{name} replaced the user's link with a copy"
+            );
+        }
+    }
+
+    /// A copy is current only while it is still a directory (or a link to the
+    /// library). A file the user put in its place stays, and deploying over it
+    /// is refused.
     #[test]
     fn a_file_in_place_of_the_copy_is_not_taken_for_a_current_copy() {
         for (name, resync) in RESYNCS {
