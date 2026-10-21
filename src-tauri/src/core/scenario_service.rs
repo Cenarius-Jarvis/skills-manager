@@ -191,6 +191,27 @@ fn remove_recorded_or_warn(path: &Path, recorded_mode: &str) -> bool {
     }
 }
 
+/// Clean up a deployment at a path its tool no longer reads: the adapter
+/// moved, or the tool's skills directory was changed. [`deployment_target`]
+/// keeps any recorded path inside the tool's root, so a recorded path that
+/// differs from the desired one lies outside it.
+///
+/// Links are removed as usual. A copy-mode directory stays where it is:
+/// nothing loads it for this tool any more, and it may hold edits made there
+/// that exist nowhere else (#593). A matching content hash is no proof it is
+/// unedited — the hash skips `.gitignore` and caches. Callers drop the record
+/// either way.
+pub(crate) fn release_abandoned_target(path: &Path, recorded_mode: &str) {
+    if recorded_mode == "copy" {
+        log::warn!(
+            "Keeping {}: a copy at a path this tool no longer reads; it may hold edits",
+            path.display()
+        );
+        return;
+    }
+    remove_recorded_or_warn(path, recorded_mode);
+}
+
 /// A key identifying the *directory entry* a target path names, used to spot
 /// two rows that claim one object under different spellings.
 ///
@@ -304,19 +325,7 @@ pub fn sync_desired_targets(
                         desired.tool
                     );
                 } else {
-                    match sync_engine::remove_recorded_target(&target_path, &existing.mode) {
-                        Ok(true) => {}
-                        Ok(false) => log::warn!(
-                            "Keeping {}: no longer matches its recorded {} deployment; \
-                             dropping the stale record only",
-                            target_path.display(),
-                            existing.mode
-                        ),
-                        Err(e) => log::warn!(
-                            "Failed to remove stale target {}: {e}",
-                            target_path.display()
-                        ),
-                    }
+                    release_abandoned_target(&target_path, &existing.mode);
                 }
                 if let Err(e) = store.delete_target(&desired.skill_id, &desired.tool) {
                     log::warn!(
@@ -527,11 +536,16 @@ pub fn unsync_obsolete_scenario_targets(
         for target in &targets {
             let path = PathBuf::from(&target.target_path);
             let key = (skill_id.clone(), target.tool.clone());
-            if desired_paths.get(&key) == Some(&path) {
-                continue;
+            match desired_paths.get(&key) {
+                Some(desired) if desired == &path => continue,
+                // Still deployed to this tool under the new preset, only
+                // somewhere else: the old path is abandoned, not removed by
+                // the user.
+                Some(_) => release_abandoned_target(&path, &target.mode),
+                None => {
+                    remove_recorded_or_warn(&path, &target.mode);
+                }
             }
-
-            remove_recorded_or_warn(&path, &target.mode);
             if let Err(e) = store.delete_target(skill_id, &target.tool) {
                 log::warn!(
                     "Failed to delete target record for skill {skill_id}, tool {}: {e}",
@@ -612,18 +626,21 @@ pub fn sync_skill_to_active_scenario(
                 if let Some(old) = old_targets.iter().find(|t| t.tool == adapter.key) {
                     let old_path = PathBuf::from(&old.target_path);
                     if old_path != target {
-                        match sync_engine::remove_recorded_target(&old_path, &old.mode) {
-                            Ok(true) => {}
-                            Ok(false) => log::warn!(
-                                "Keeping {}: no longer matches its recorded {} deployment; \
-                                 dropping the stale record only",
+                        // As in `sync_desired_targets`: a path another tool
+                        // still deploys to is its live deployment.
+                        let claimed_by_another_tool = old_targets.iter().any(|other| {
+                            other.tool != adapter.key
+                                && PathBuf::from(&other.target_path) == old_path
+                        });
+                        if claimed_by_another_tool {
+                            log::info!(
+                                "Keeping {}: still the deployment target of another tool; \
+                                 dropping {}'s stale record only",
                                 old_path.display(),
-                                old.mode
-                            ),
-                            Err(e) => log::warn!(
-                                "Failed to remove stale target {}: {e}",
-                                old_path.display()
-                            ),
+                                adapter.key
+                            );
+                        } else {
+                            release_abandoned_target(&old_path, &old.mode);
                         }
                         let _ = store.delete_target(skill_id, &adapter.key);
                     } else {
