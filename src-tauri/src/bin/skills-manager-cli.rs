@@ -1869,6 +1869,9 @@ fn run_check(
             });
             continue;
         }
+        // A local check only reads the disk, so the cache that spares remote
+        // round-trips must not answer for it.
+        let force = force || matches!(skill.source_type.as_str(), "local" | "import");
         let report =
             match cmd::check_skill_update_internal(store, &skill.id, force, proxy_url.as_deref()) {
                 Ok(dto) => CheckReport {
@@ -3688,9 +3691,13 @@ mod tests {
             last_checked_at: None,
             last_check_error: None,
         };
-        store.insert_skill(&record("demo", "local")).unwrap();
+        // As an install leaves it: checked a moment ago, nothing compared yet.
+        let mut installed = record("demo", "local");
+        installed.update_status = "local_only".to_string();
+        installed.last_checked_at = Some(chrono::Utc::now().timestamp_millis());
+        store.insert_skill(&installed).unwrap();
         let check = || {
-            run_check(&store, Some("demo"), false, true)
+            run_check(&store, Some("demo"), false, false)
                 .unwrap()
                 .remove(0)
         };
@@ -3704,6 +3711,12 @@ mod tests {
 
         fs::remove_dir_all(&source).unwrap();
         assert_eq!(check().update_status, "source_missing");
+
+        store.insert_skill(&record("imported", "import")).unwrap();
+        let report = run_check(&store, Some("imported"), false, false)
+            .unwrap()
+            .remove(0);
+        assert_eq!(report.update_status, "source_missing");
 
         store.insert_skill(&record("site", "well-known")).unwrap();
         let report = run_check(&store, Some("site"), false, true)
