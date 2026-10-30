@@ -13,7 +13,8 @@
     "newPreset": "Nuevo preset",
     "projects": "Espacios de trabajo de proyecto",
     "addProject": "Vincular proyecto",
-    "settings": "Ajustes"
+    "settings": "Ajustes",
+    "devices": "Dispositivos"
   },
   "help": {
     "eyebrow": "Guía",
@@ -222,6 +223,36 @@
       "title": "Resumen de la Biblioteca"
     },
     "title": "Copia de seguridad"
+  },
+  "devices": {
+    "title": "Dispositivos",
+    "subtitle": "Gestiona habilidades en tus otras máquinas",
+    "refresh": "Actualizar desde el canal",
+    "loading": "Cargando dispositivos…",
+    "notConfigured": "Aún no hay un canal de dispositivos configurado. Configúralo en esta página para gestionar otros dispositivos.",
+    "noDevices": "Ningún dispositivo ha informado todavía. Aparecerán aquí cuando su ejecutor publique un informe de estado.",
+    "thisDevice": "Este dispositivo",
+    "online": "En línea",
+    "offline": "Desconectado",
+    "lastSeen": "Último informe: {{time}}",
+    "neverReported": "Nunca ha informado",
+    "noSkillRecords": "Este dispositivo aún no ha informado de habilidades de agentes.",
+    "instructionsTitle": "Solicitudes de despliegue",
+    "dataNotice": "El éxito solo se muestra cuando el propio dispositivo informó del resultado — nunca solo porque se escribiera una solicitud.",
+    "noInstructions": "Aún no hay solicitudes de despliegue.",
+    "state": {
+      "pending": "Pendiente de sincronizar",
+      "executing": "Ejecutando",
+      "success": "Desplegada (informada)",
+      "failed": "Fallida",
+      "device_offline": "Dispositivo sin conexión",
+      "stale": "Obsoleta",
+      "expired": "Caducada"
+    },
+    "action": {
+      "deploy": "Desplegar",
+      "undeploy": "Retirar"
+    }
   },
   "firstRun": {
     "title": "¿Empezar de cero o restaurar desde una copia?",

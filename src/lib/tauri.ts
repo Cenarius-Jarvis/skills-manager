@@ -862,3 +862,105 @@ export const updateGlobalLocalSkillFromCenter = (agent: string, skillRelativePat
 
 export const deleteGlobalLocalSkill = (agent: string, skillRelativePath: string) =>
   invoke<void>("delete_global_local_skill", { agent, skillRelativePath });
+
+// ── Devices ──
+
+/** Per-agent skill records a device reported about itself. These are the
+ * device's word about reality — never a local fact. */
+export interface DeviceSkillRecord {
+  device_id: string;
+  agent_key: string;
+  skill_name: string;
+  content_hash: string | null;
+  deployed_at: number | null;
+  reported_commit: string | null;
+}
+
+export type DeviceTaskState =
+  | "pending"
+  | "executing"
+  | "success"
+  | "failed"
+  | "device_offline"
+  | "stale"
+  | "expired";
+
+export interface DeviceInstructionRow {
+  id: string;
+  device_id: string;
+  action: string;
+  skill_url: string | null;
+  skill_branch: string | null;
+  skill_subpath: string | null;
+  skill_name: string | null;
+  agent_key: string;
+  created_at: number;
+  expires_at: number | null;
+  created_by: string | null;
+  instruction_commit: string | null;
+  receipt_commit: string | null;
+  state: DeviceTaskState;
+  receipt_status: string | null;
+  receipt_reason: string | null;
+  receipt_detail: string | null;
+  receipt_at: number | null;
+  executor_version: string | null;
+}
+
+export interface DeviceWithStatus {
+  id: string;
+  name: string;
+  platform: string | null;
+  created_at: number;
+  last_seen_at: number | null;
+  online: boolean;
+  skill_records: DeviceSkillRecord[];
+}
+
+export interface DeviceChannelStatus {
+  configured: boolean;
+  url_redacted: string | null;
+  branch: string;
+  local_device_id: string;
+  local_device_name: string;
+  online_threshold_secs: number;
+}
+
+export interface DevicesPage {
+  channel: DeviceChannelStatus;
+  devices: DeviceWithStatus[];
+  instructions: DeviceInstructionRow[];
+}
+
+export interface DeviceRow {
+  id: string;
+  name: string;
+  platform: string | null;
+  created_at: number;
+}
+
+export const devicesGetPage = () => invoke<DevicesPage>("devices_get_page");
+
+/** Fetches the control channel and rebuilds the local projection. */
+export const devicesRefreshChannel = () =>
+  invoke<DevicesPage>("devices_refresh_channel");
+
+export const devicesSetChannelConfig = (url: string | null, branch?: string) =>
+  invoke<void>("devices_set_channel_config", { url, branch });
+
+export const devicesAddDevice = (name: string, platform?: string) =>
+  invoke<DeviceRow>("devices_add_device", { name, platform });
+
+export const devicesRemoveDevice = (deviceId: string) =>
+  invoke<void>("devices_remove_device", { deviceId });
+
+export const devicesCreateInstruction = (args: {
+  deviceId: string;
+  action: string;
+  skillUrl?: string;
+  skillBranch?: string;
+  skillSubpath?: string;
+  skillName?: string;
+  agentKey: string;
+  ttlSecs?: number;
+}) => invoke<DeviceInstructionRow>("devices_create_instruction", args);
