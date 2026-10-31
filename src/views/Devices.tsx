@@ -12,7 +12,7 @@ import {
   CircleDashed,
 } from "lucide-react";
 import * as api from "../lib/tauri";
-import type { DeviceInstructionRow, DeviceTaskState } from "../lib/tauri";
+import type { DeviceTaskState } from "../lib/tauri";
 
 /** Visual + label mapping for the seven task states (docs/devices.md).
  * "success" is always backed by the device's own receipt — never by the
