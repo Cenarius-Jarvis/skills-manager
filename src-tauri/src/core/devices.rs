@@ -139,9 +139,12 @@ pub struct DeviceReceipt {
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    /// Commit of the control channel the executor acted on. A success whose
-    /// commit does not match the instruction's import commit is shown as
-    /// stale, never as success.
+    /// Commit in which the instruction file was first published (resolved via
+    /// git log, not the head of the fetch — the channel advances when devices
+    /// push receipts and state). A receipt whose commit differs from the
+    /// instruction's publish commit is displayed as stale, never as success;
+    /// re-publishing an instruction changes its commit and invalidates older
+    /// receipts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instruction_commit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -801,8 +804,12 @@ fn parse_json_file<T: for<'de> Deserialize<'de>>(
     path: &Path,
     warnings: &mut Vec<String>,
 ) -> Option<T> {
+    // Optional files (device.json / state.json) are routinely absent — that
+    // is normal channel state, not a problem. Only a file that exists but
+    // cannot be read or parsed is worth a warning.
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
         Err(err) => {
             warnings.push(format!("{}: unreadable ({err})", path.display()));
             return None;
@@ -817,11 +824,40 @@ fn parse_json_file<T: for<'de> Deserialize<'de>>(
     }
 }
 
+/// Resolves the commit in which a channel file was first added. Receipt
+/// matching is checked against this commit, so it must be the instruction's
+/// actual publish commit — not the head of whatever refresh happens to see
+/// the file first (the device may act, and land receipts, before the
+/// manager's first import).
+fn file_creation_commit(dir: &Path, rel_path: &str) -> Option<String> {
+    let out = run_git(
+        Some(dir),
+        None,
+        &[
+            "log",
+            "--format=%H",
+            "--diff-filter=A",
+            "-1",
+            "--",
+            rel_path,
+        ],
+    )
+    .ok()?;
+    let commit = out.trim().to_string();
+    if commit.is_empty() {
+        None
+    } else {
+        Some(commit)
+    }
+}
+
 /// Reads the whole channel and validates everything it can. Items that fail
 /// validation are dropped with a warning rather than aborting the refresh.
 pub fn fetch_channel_snapshot(url: &str, branch: &str) -> Result<ChannelSnapshot> {
     let (tmp, dir) = prepare_working_copy(url, branch)?;
-    let head_commit = run_git(Some(&dir), None, &["rev-parse", "HEAD"])?
+    // A freshly initialized channel has no commits yet; that is normal.
+    let head_commit = run_git(Some(&dir), None, &["rev-parse", "--verify", "HEAD"])
+        .unwrap_or_default()
         .trim()
         .to_string();
     let mut snapshot = ChannelSnapshot {
@@ -901,7 +937,14 @@ pub fn fetch_channel_snapshot(url: &str, branch: &str) -> Result<ChannelSnapshot
                             continue;
                         }
                         match validate_instruction(&inst) {
-                            Ok(()) => snapshot.instructions.push((inst, head_commit.clone())),
+                            Ok(()) => {
+                                let commit = file_creation_commit(
+                                    &dir,
+                                    &format!("devices/{device_id}/instructions/{name}"),
+                                )
+                                .unwrap_or_else(|| head_commit.clone());
+                                snapshot.instructions.push((inst, commit));
+                            }
                             Err(err) => snapshot.warnings.push(format!(
                                 "devices/{device_id}/instructions/{name}: {err}"
                             )),

@@ -93,7 +93,7 @@ the safe charset. There is deliberately no "run command" action.
   "device_id": "…",
   "status": "success",                      // "success" | "failed" | "rejected"
   "reason": "none",                         // conflict | expired | unknown_agent | …
-  "instruction_commit": "<sha>",            // commit the executor acted on (null if it never fetched one)
+  "instruction_commit": "<sha>",            // commit in which the instruction file was published
   "detail": "…",
   "executor_version": "1.43.1",
   "finished_at": 1769000100
@@ -101,9 +101,12 @@ the safe charset. There is deliberately no "run command" action.
 ```
 
 Receipts are validated against their instruction: IDs and device must match.
-A receipt whose `instruction_commit` differs from the commit the instruction
-was imported at is displayed as **stale**, never as success — a stale
-success must not be able to mask a newer unexecuted instruction.
+A receipt whose `instruction_commit` differs from the instruction's own
+publish commit is displayed as **stale**, never as success — a stale
+success must not be able to mask a newer unexecuted instruction. (The
+publish commit is resolved with `git log --diff-filter=A`, so it stays
+stable even though the channel advances whenever devices push receipts
+and state.)
 
 ### Task states shown in the UI
 
