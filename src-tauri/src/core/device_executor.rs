@@ -17,7 +17,7 @@ use anyhow::{bail, Context, Result};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -183,6 +183,7 @@ impl Journal {
 
 /// Why an instruction could not be applied. `reason` feeds the receipt; the
 /// executor never converts a refusal into a success.
+#[derive(Debug)]
 pub struct Reject {
     pub reason: &'static str,
     pub detail: String,
@@ -369,7 +370,8 @@ fn scan_agent_skills(agent_root: &Path) -> Vec<AgentSkillReport> {
         let content_hash = hash_file(&skill_md).ok();
         let deployed_at = entry
             .metadata()
-            .and_then(|m| m.modified().ok())
+            .and_then(|m| m.modified())
+            .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs() as i64);
         reports.push(AgentSkillReport {
@@ -844,6 +846,7 @@ mod tests {
         run_git_quiet(&["-C", &work.to_string_lossy(), "push", "origin", "HEAD"]);
 
         let daemon = spawn_git_daemon(&env.base);
+        let mut daemon = daemon;
         let source_url = format!("git://127.0.0.1:{}/source-repo", daemon.port);
         wait_for_daemon(&source_url);
 
@@ -948,7 +951,7 @@ mod tests {
         let devs = store.get_devices().unwrap();
         assert!(devs[0].last_seen_at.is_some());
 
-        daemon.kill().ok();
+        daemon.kill();
     }
 
     /// A minimal git daemon handle: random port, kill on demand (and on
@@ -989,7 +992,7 @@ mod tests {
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn();
-            if let Ok(child) = child {
+            if let Ok(mut child) = child {
                 std::thread::sleep(std::time::Duration::from_millis(300));
                 if child.try_wait().unwrap_or(None).is_none() {
                     return GitDaemon { child, port };
