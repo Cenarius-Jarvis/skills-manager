@@ -864,6 +864,12 @@ export const deleteGlobalLocalSkill = (agent: string, skillRelativePath: string)
   invoke<void>("delete_global_local_skill", { agent, skillRelativePath });
 
 // ── Devices ──
+//
+// All shapes mirror the Rust structs in `core/devices.rs` /
+// `commands/devices.rs` field-for-field (snake_case on the wire). Two rules
+// the UI must keep: per-device skill records are the device's *own report*
+// (never a local fact), and "success" is only ever rendered from a receipt
+// whose commit matches the instruction — see docs/devices.md.
 
 /** Per-agent skill records a device reported about itself. These are the
  * device's word about reality — never a local fact. */
