@@ -258,7 +258,7 @@ pub fn validate_skill_subpath(subpath: Option<&str>) -> Result<()> {
     if subpath.len() > 256 || subpath.contains('\\') || subpath.contains("..") {
         bail!("invalid skill_subpath {subpath:?}");
     }
-    let mut segments = subpath.split('/');
+    let segments = subpath.split('/');
     if subpath.starts_with('/') || subpath.ends_with('/') {
         bail!("invalid skill_subpath {subpath:?}");
     }
@@ -680,7 +680,7 @@ pub fn publish_instructions(
     if let Some(manifest) = manifest {
         validate_manifest(manifest)?;
     }
-    let (tmp, dir) = prepare_working_copy(url, branch)?;
+    let (_tmp, dir) = prepare_working_copy(url, branch)?;
     ensure_protocol_file(&dir)?;
     if let Some(manifest) = manifest {
         let base = dir.join(device_dir_name(&manifest.id)?);
@@ -718,7 +718,7 @@ pub fn publish_executor_update(
     if let Some(report) = state {
         validate_state_report(report)?;
     }
-    let (tmp, dir) = prepare_working_copy(url, branch)?;
+    let (_tmp, dir) = prepare_working_copy(url, branch)?;
     ensure_protocol_file(&dir)?;
     for receipt in receipts {
         let base = dir
@@ -776,7 +776,7 @@ pub fn validate_skill_name(name: &str) -> Result<()> {
 
 pub fn publish_state_report(url: &str, branch: &str, report: &DeviceStateReport) -> Result<String> {
     validate_state_report(report)?;
-    let (tmp, dir) = prepare_working_copy(url, branch)?;
+    let (_tmp, dir) = prepare_working_copy(url, branch)?;
     ensure_protocol_file(&dir)?;
     let base = dir.join(device_dir_name(&report.device_id)?);
     std::fs::create_dir_all(&base)?;
@@ -820,7 +820,7 @@ fn parse_json_file<T: for<'de> Deserialize<'de>>(
 /// Reads the whole channel and validates everything it can. Items that fail
 /// validation are dropped with a warning rather than aborting the refresh.
 pub fn fetch_channel_snapshot(url: &str, branch: &str) -> Result<ChannelSnapshot> {
-    let (tmp, dir) = prepare_working_copy(url, branch)?;
+    let (_tmp, dir) = prepare_working_copy(url, branch)?;
     let head_commit = run_git(Some(&dir), None, &["rev-parse", "HEAD"])?
         .trim()
         .to_string();
@@ -1071,7 +1071,7 @@ pub fn import_snapshot(store: &SkillStore, snapshot: &ChannelSnapshot) -> Result
         .map(|(id, report)| (id.clone(), report.executing.clone()))
         .collect();
     let devices = store.get_devices()?;
-    let mut last_seen_by_id: HashMap<String, Option<i64>> = devices
+    let last_seen_by_id: HashMap<String, Option<i64>> = devices
         .iter()
         .map(|d| (d.id.clone(), d.last_seen_at))
         .collect();
