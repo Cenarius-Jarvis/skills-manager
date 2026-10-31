@@ -820,7 +820,7 @@ fn parse_json_file<T: for<'de> Deserialize<'de>>(
 /// Reads the whole channel and validates everything it can. Items that fail
 /// validation are dropped with a warning rather than aborting the refresh.
 pub fn fetch_channel_snapshot(url: &str, branch: &str) -> Result<ChannelSnapshot> {
-    let (_tmp, dir) = prepare_working_copy(url, branch)?;
+    let (tmp, dir) = prepare_working_copy(url, branch)?;
     let head_commit = run_git(Some(&dir), None, &["rev-parse", "HEAD"])?
         .trim()
         .to_string();
@@ -921,7 +921,6 @@ pub fn fetch_channel_snapshot(url: &str, branch: &str) -> Result<ChannelSnapshot
         }
     }
 
-    drop(tmp);
     Ok(snapshot)
 }
 
