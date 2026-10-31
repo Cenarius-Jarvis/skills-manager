@@ -802,4 +802,230 @@ mod tests {
             .output()
             .unwrap();
     }
+
+    /// The full loop, end to end: the manager publishes an instruction on the
+    /// channel, the executor fetches the skill over the real `git://` network
+    /// path (a local `git daemon` stands in for the remote skill repo — the
+    /// URL validator only accepts network schemes, by design), deploys into a
+    /// simulated agent directory and publishes its receipt, and a fresh import
+    /// derives "success". Also covers the conflict path: a foreign directory
+    /// with the target name must survive untouched and produce a rejected
+    /// receipt.
+    #[test]
+    fn end_to_end_instruction_cycle_publishes_receipt() {
+        let env = TestEnv::new();
+
+        // Skill source served by a local git daemon (git:// is accepted by
+        // the URL validator; local paths are not, and that is the point).
+        let source_repo = env.base.join("source-repo");
+        std::fs::create_dir_all(&source_repo).unwrap();
+        devices_run_git_init(&source_repo);
+        let work = env.base.join("source-work");
+        run_git_quiet(&[
+            "clone",
+            &source_repo.to_string_lossy(),
+            &work.to_string_lossy(),
+        ]);
+        let skill_dir = work.join("skills").join("pilot-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "# pilot-skill\n").unwrap();
+        run_git_quiet(&["-C", &work.to_string_lossy(), "add", "-A"]);
+        run_git_quiet(&[
+            "-C",
+            &work.to_string_lossy(),
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-m",
+            "skill",
+        ]);
+        run_git_quiet(&["-C", &work.to_string_lossy(), "push", "origin", "HEAD"]);
+
+        let daemon = spawn_git_daemon(&env.base);
+        let source_url = format!("git://127.0.0.1:{}/source-repo", daemon.port);
+        wait_for_daemon(&source_url);
+
+        // Channel remote.
+        let channel = env.base.join("channel.git");
+        std::fs::create_dir_all(&channel).unwrap();
+        devices_run_git_init(&channel);
+        let channel_url = channel.to_string_lossy().to_string();
+
+        // Manager side: register the device and publish the deploy request.
+        let store = crate::core::skill_store::SkillStore::new(&env.base.join("db.sqlite")).unwrap();
+        let device_row = crate::core::devices::DeviceRow {
+            id: "dev-e2e".to_string(),
+            name: "E2E Device".to_string(),
+            platform: Some("linux".to_string()),
+            created_at: 1_000,
+            last_seen_at: None,
+            last_state_commit: None,
+        };
+        store.upsert_device(&device_row).unwrap();
+        let inst = crate::core::devices::DeviceInstruction {
+            schema: devices::DEVICE_PROTOCOL_VERSION,
+            id: "inst-e2e".to_string(),
+            device_id: "dev-e2e".to_string(),
+            action: devices::ACTION_DEPLOY.to_string(),
+            skill_url: Some(source_url),
+            skill_branch: None,
+            skill_subpath: Some("skills/pilot-skill".to_string()),
+            skill_name: Some("pilot-skill".to_string()),
+            agent_key: "codex".to_string(),
+            created_at: 1_100,
+            expires_at: Some(99_999),
+            created_by: Some("manager".to_string()),
+        };
+        devices::publish_instructions(
+            &channel_url,
+            "devices-test",
+            Some(&crate::core::devices::DeviceManifest {
+                schema: devices::DEVICE_PROTOCOL_VERSION,
+                id: "dev-e2e".to_string(),
+                name: "E2E Device".to_string(),
+                platform: Some("linux".to_string()),
+                first_seen: 1_000,
+                executor_version: None,
+            }),
+            &[inst.clone()],
+        )
+        .unwrap();
+
+        // Executor side: one run deploys into the simulated agent directory.
+        let agent_root = env.base.join("agents").join("codex");
+        std::fs::create_dir_all(&agent_root).unwrap();
+        // A foreign directory with the target name must survive untouched.
+        let foreign = agent_root.join("pilot-skill");
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::fs::write(foreign.join("SKILL.md"), "# not ours\n").unwrap();
+
+        let config = ExecutorConfig {
+            url: channel_url.clone(),
+            branch: "devices-test".to_string(),
+            device_id: "dev-e2e".to_string(),
+            agents: vec![AgentMapping {
+                key: "codex".to_string(),
+                dir: agent_root.clone(),
+            }],
+            max_instructions: 10,
+            dry_run: false,
+        };
+        let report = run_once(&config).unwrap();
+        assert_eq!(report.executed, 0, "conflict: nothing deployed");
+        assert_eq!(report.rejected, 1);
+        assert!(report.published, "{:?}", report.publish_error);
+        assert_eq!(
+            std::fs::read_to_string(foreign.join("SKILL.md")).unwrap(),
+            "# not ours\n",
+            "foreign directory must survive"
+        );
+
+        // Manager side: refresh sees the rejection, then clears the conflict
+        // and re-runs, which now succeeds and reports success.
+        let snapshot = devices::fetch_channel_snapshot(&channel_url, "devices-test").unwrap();
+        devices::import_snapshot(&store, &snapshot).unwrap();
+        let rows = store.get_device_instructions(None).unwrap();
+        assert_eq!(rows[0].state, devices::TASK_STATE_FAILED);
+
+        std::fs::remove_dir_all(&foreign).unwrap();
+        let report = run_once(&config).unwrap();
+        assert_eq!(report.executed, 1, "{:?}", report.details);
+        assert!(agent_root.join("pilot-skill").join("SKILL.md").is_file());
+
+        let snapshot = devices::fetch_channel_snapshot(&channel_url, "devices-test").unwrap();
+        devices::import_snapshot(&store, &snapshot).unwrap();
+        let rows = store.get_device_instructions(None).unwrap();
+        assert_eq!(rows[0].state, devices::TASK_STATE_SUCCESS);
+        assert_eq!(rows[0].receipt_status.as_deref(), Some("success"));
+        assert_eq!(
+            rows[0].receipt_commit.as_deref(),
+            rows[0].instruction_commit.as_deref(),
+            "receipt must match the instruction commit"
+        );
+        // The device is alive from the manager's point of view.
+        let devs = store.get_devices().unwrap();
+        assert!(devs[0].last_seen_at.is_some());
+
+        daemon.kill().ok();
+    }
+
+    /// A minimal git daemon handle: random port, kill on demand (and on
+    /// drop, so a failing assertion cannot leak a server past the test).
+    struct GitDaemon {
+        child: std::process::Child,
+        port: u16,
+    }
+
+    impl GitDaemon {
+        fn kill(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    impl Drop for GitDaemon {
+        fn drop(&mut self) {
+            self.kill();
+        }
+    }
+
+    fn spawn_git_daemon(base: &Path) -> GitDaemon {
+        // Try a handful of random ports; a CI runner may have one busy.
+        let mut seed = std::process::id() as u64;
+        for _ in 0..10 {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let port = 20000 + (seed % 20000) as u16;
+            let child = std::process::Command::new("git")
+                .args([
+                    "daemon",
+                    "--reuseaddr",
+                    "--listen=127.0.0.1",
+                    &format!("--port={port}"),
+                    &format!("--base-path={}", base.display()),
+                    "--export-all",
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+            if let Ok(child) = child {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                if child.try_wait().unwrap_or(None).is_none() {
+                    return GitDaemon { child, port };
+                }
+            }
+        }
+        panic!("could not start git daemon for the e2e test");
+    }
+
+    fn wait_for_daemon(url: &str) {
+        for _ in 0..20 {
+            let probe = std::process::Command::new("git")
+                .args(["ls-remote", url])
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output();
+            if let Ok(out) = probe {
+                if out.status.success() {
+                    return;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        panic!("git daemon never became reachable at {url}");
+    }
+
+    fn run_git_quiet(args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }
