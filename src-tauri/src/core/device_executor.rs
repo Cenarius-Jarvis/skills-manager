@@ -877,8 +877,10 @@ mod tests {
             skill_subpath: Some("skills/pilot-skill".to_string()),
             skill_name: Some("pilot-skill".to_string()),
             agent_key: "codex".to_string(),
-            created_at: 1_100,
-            expires_at: Some(99_999),
+            // Real-clock TTL: the executor checks expiry against the wall
+            // clock, so a fixed fake timestamp would be rejected as expired.
+            created_at: now_ts(),
+            expires_at: Some(now_ts() + 86_400),
             created_by: Some("manager".to_string()),
         };
         devices::publish_instructions(
