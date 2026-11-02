@@ -94,6 +94,17 @@ function formatTimestamp(ts: number | null, locale: string): string {
   return new Date(ts * 1000).toLocaleString(locale);
 }
 
+/** Tauri command rejections arrive as the serialized AppError object
+ * ({kind, message}); String(err) on it yields "[object Object]". */
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "object" && err !== null && "message" in err) {
+    const msg = (err as { message: unknown }).message;
+    if (typeof msg === "string" && msg) return msg;
+  }
+  return String(err);
+}
+
 function ChannelSetupForm({ onSaved }: { onSaved: () => Promise<void> }) {
   const { t } = useTranslation();
   const [url, setUrl] = useState("");
@@ -111,7 +122,7 @@ function ChannelSetupForm({ onSaved }: { onSaved: () => Promise<void> }) {
       toast.success(t("devices.channelSaved"));
       await onSaved();
     } catch (err) {
-      toast.error(String(err));
+      toast.error(errorMessage(err));
     } finally {
       setSaving(false);
     }
@@ -175,7 +186,7 @@ function AddDeviceForm({ onAdded }: { onAdded: () => Promise<void> }) {
       setPlatform("");
       await onAdded();
     } catch (err) {
-      toast.error(String(err));
+      toast.error(errorMessage(err));
     } finally {
       setAdding(false);
     }
@@ -244,7 +255,7 @@ function InstructionForm({ device, onCreated }: { device: DeviceWithStatus; onCr
       toast.success(t("devices.instructionCreated"));
       await onCreated();
     } catch (err) {
-      toast.error(String(err));
+      toast.error(errorMessage(err));
     } finally {
       setCreating(false);
     }
