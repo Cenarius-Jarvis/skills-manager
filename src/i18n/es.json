@@ -252,7 +252,30 @@
     "action": {
       "deploy": "Desplegar",
       "undeploy": "Retirar"
-    }
+    },
+    "channelTitle": "Configurar el canal de dispositivos",
+    "channelHint": "El canal es un repositorio Git privado dedicado que transporta instrucciones y recibos entre tus máquinas. Crea un repositorio privado vacío en GitHub y pega su URL aquí.",
+    "channelUrlLabel": "URL del repositorio del canal",
+    "channelBranchLabel": "Rama del canal",
+    "saveChannel": "Guardar configuración",
+    "saving": "Guardando…",
+    "channelUrlRequired": "Se requiere la URL del repositorio",
+    "channelSaved": "Canal de dispositivos configurado",
+    "deviceNameRequired": "Se requiere el nombre del dispositivo",
+    "deviceAdded": "Dispositivo añadido",
+    "deviceNameLabel": "Nombre del dispositivo",
+    "devicePlatformLabel": "Plataforma (opcional)",
+    "addDevice": "Añadir dispositivo",
+    "instructTitle": "Enviar solicitud de despliegue",
+    "instructHint": "La solicitud se publica en el canal; el estado solo pasa a “desplegada” cuando el propio dispositivo informa del resultado.",
+    "actionLabel": "Acción",
+    "skillUrlLabel": "URL del repositorio de la habilidad",
+    "skillBranchLabel": "Rama (opcional)",
+    "skillSubpathLabel": "Subruta en el repositorio",
+    "skillNameLabel": "Nombre de la habilidad",
+    "agentKeyLabel": "Agente de destino",
+    "createInstruction": "Enviar",
+    "instructionCreated": "Solicitud de despliegue publicada"
   },
   "firstRun": {
     "title": "¿Empezar de cero o restaurar desde una copia?",
