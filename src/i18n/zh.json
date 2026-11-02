@@ -252,7 +252,30 @@
     "action": {
       "deploy": "部署",
       "undeploy": "取消部署"
-    }
+    },
+    "channelTitle": "配置设备通道",
+    "channelHint": "通道是一个专用私有 Git 仓库，在你的电脑之间传递指令和回执。在 GitHub 上新建一个空的私有仓库，把地址粘贴到这里。",
+    "channelUrlLabel": "通道仓库地址",
+    "channelBranchLabel": "通道分支",
+    "saveChannel": "保存通道配置",
+    "saving": "保存中…",
+    "channelUrlRequired": "请填写通道仓库地址",
+    "channelSaved": "设备通道已配置",
+    "deviceNameRequired": "请填写设备名称",
+    "deviceAdded": "设备已添加",
+    "deviceNameLabel": "设备名称",
+    "devicePlatformLabel": "平台（可选）",
+    "addDevice": "添加设备",
+    "instructTitle": "下发部署请求",
+    "instructHint": "请求会发布到通道；下面的状态只有在该设备自己报告结果后才会变成“已部署”。",
+    "actionLabel": "动作",
+    "skillUrlLabel": "技能仓库地址",
+    "skillBranchLabel": "分支（可选）",
+    "skillSubpathLabel": "仓库内子路径",
+    "skillNameLabel": "技能名称",
+    "agentKeyLabel": "目标 Agent",
+    "createInstruction": "下发",
+    "instructionCreated": "部署请求已发布"
   },
   "firstRun": {
     "title": "全新开始，还是从备份恢复？",

@@ -104,14 +104,17 @@ describe("Devices page", () => {
     expect(badge?.getAttribute("data-state")).toBe("success");
   });
 
-  it("shows the setup hint while the channel is unconfigured", async () => {
+  it("shows the channel setup form while the channel is unconfigured", async () => {
     tauri.devicesGetPage.mockResolvedValue({
       ...pageFixture,
       channel: { ...pageFixture.channel, configured: false },
     });
     await act(async () => root.render(<Devices />));
 
-    expect(container.querySelector('[data-testid="devices-not-configured"]')).not.toBeNull();
+    const panel = container.querySelector('[data-testid="devices-not-configured"]');
+    expect(panel).not.toBeNull();
+    expect(panel!.querySelector('[data-testid="channel-url-input"]')).not.toBeNull();
+    expect(panel!.querySelector('[data-testid="channel-save"]')).not.toBeNull();
   });
 
   it("surfaces fetch errors instead of rendering an empty page", async () => {

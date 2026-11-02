@@ -252,7 +252,30 @@
     "action": {
       "deploy": "部署",
       "undeploy": "取消部署"
-    }
+    },
+    "channelTitle": "設定裝置通道",
+    "channelHint": "通道是一個專用私有 Git 倉庫，在你的電腦之間傳遞指令和回執。在 GitHub 上新建一個空的私有倉庫，把地址貼上到這裡。",
+    "channelUrlLabel": "通道倉庫地址",
+    "channelBranchLabel": "通道分支",
+    "saveChannel": "儲存通道設定",
+    "saving": "儲存中…",
+    "channelUrlRequired": "請填寫通道倉庫地址",
+    "channelSaved": "裝置通道已設定",
+    "deviceNameRequired": "請填寫裝置名稱",
+    "deviceAdded": "裝置已新增",
+    "deviceNameLabel": "裝置名稱",
+    "devicePlatformLabel": "平台（可選）",
+    "addDevice": "新增裝置",
+    "instructTitle": "下發部署請求",
+    "instructHint": "請求會發布到通道；下面的狀態只有在該裝置自己回報結果後才會變成「已部署」。",
+    "actionLabel": "動作",
+    "skillUrlLabel": "技能倉庫地址",
+    "skillBranchLabel": "分支（可選）",
+    "skillSubpathLabel": "倉庫內子路徑",
+    "skillNameLabel": "技能名稱",
+    "agentKeyLabel": "目標 Agent",
+    "createInstruction": "下發",
+    "instructionCreated": "部署請求已發布"
   },
   "firstRun": {
     "title": "全新開始，還是從備份還原？",
