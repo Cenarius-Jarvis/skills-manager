@@ -987,6 +987,15 @@ pub fn sync_single_skill_to_tool(
     tool: &str,
     intent: DeployIntent<'_>,
 ) -> Result<(), AppError> {
+    // Library layers make same-named skills in different layers legitimate;
+    // deploying two of them to one tool would still collide on the Agent
+    // folder, so the name conflict refuses here instead of overwriting.
+    crate::core::library_layers::assert_no_target_name_conflicts(
+        store,
+        tool,
+        std::slice::from_ref(&skill_id.to_string()),
+    )
+    .map_err(|err| AppError::invalid_input(err.to_string()))?;
     let adapter = tool_adapters::find_adapter_with_store(store, tool)
         .ok_or_else(|| AppError::not_found(format!("Unknown tool: {}", tool)))?;
 

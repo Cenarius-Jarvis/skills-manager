@@ -6,7 +6,7 @@ use anyhow::{Context, anyhow, bail};
 use app_lib::commands::{presets as preset_cmd, skills as cmd, tools as tool_cmd};
 use app_lib::core::{
     app_state, audit_log::AuditDraft, central_repo, error::AppError, git_backup, git_fetcher,
-    installer, merge, repo_lock::RepoLock, scenario_service, skill_metadata,
+    installer, library_layers, merge, repo_lock::RepoLock, scenario_service, skill_metadata,
     skill_store::SkillStore, skillssh_api, sync_engine, sync_metadata, tool_adapters, tool_service,
     well_known,
 };
@@ -165,6 +165,16 @@ enum SkillsCommand {
         references: Vec<String>,
     },
     /// Deploy library skills to one or more agents' global skill directories.
+    Layer {
+        #[command(subcommand)]
+        command: LayerCommand,
+    },
+    Move {
+        /// Skill ref (id / name / dir basename / central path)
+        reference: String,
+        /// Target layer name. Omit to move back to the library root.
+        layer: Option<String>,
+    },
     Deploy {
         #[arg(required = true)]
         references: Vec<String>,
@@ -851,8 +861,89 @@ fn run_set_agents_enabled(
 
 // ── skills ────────────────────────────────────────────────────────────────
 
+#[derive(Subcommand, Debug)]
+enum LayerCommand {
+    /// List layers and their skill counts.
+    List,
+    /// Create an empty layer.
+    Create {
+        /// Layer name (CJK, letters, digits, spaces, - and _ are allowed).
+        name: String,
+    },
+    /// Rename a layer. Skills inside keep their ids and deployments.
+    Rename { old: String, new: String },
+    /// Delete an empty layer.
+    Delete { name: String },
+}
+
+fn resolve_one_skill(store: &SkillStore, reference: &str) -> anyhow::Result<String> {
+    if let Some(record) = store.get_skill_by_id(reference)? {
+        return Ok(record.id);
+    }
+    let needle = reference.to_lowercase();
+    let mut hits: Vec<String> = store
+        .get_all_skills()?
+        .into_iter()
+        .filter(|s| {
+            s.name.to_lowercase() == needle
+                || Path::new(&s.central_path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_lowercase() == needle)
+                    .unwrap_or(false)
+        })
+        .map(|s| s.id)
+        .collect();
+    hits.sort();
+    hits.dedup();
+    match hits.len() {
+        1 => Ok(hits.remove(0)),
+        0 => Err(anyhow!("skill not found: {reference}")),
+        _ => Err(anyhow!(
+            "reference {reference:?} matches {} skills; use an id instead",
+            hits.len()
+        )),
+    }
+}
+
+fn run_layers(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Result<()> {
+    match args.command {
+        Some(LayerCommand::List) => {
+            let layers = library_layers::list_layers(store).map_err(AppError::db)?;
+            print_json(&layers, json);
+        }
+        Some(LayerCommand::Create { name }) => {
+            let name = library_layers::create_layer(store, &name).map_err(AppError::db)?;
+            print_json(&serde_json::json!({ "name": name, "created": true }), json);
+        }
+        Some(LayerCommand::Rename { old, new }) => {
+            let name = library_layers::rename_layer(store, &old, &new).map_err(AppError::db)?;
+            print_json(&serde_json::json!({ "old": old, "new": name, "renamed": true }), json);
+        }
+        Some(LayerCommand::Delete { name }) => {
+            library_layers::delete_layer(store, &name).map_err(AppError::db)?;
+            print_json(&serde_json::json!({ "name": name, "deleted": true }), json);
+        }
+        None => anyhow::bail!("choose a layer subcommand (list/create/rename/delete)"),
+    }
+    Ok(())
+}
+
 fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Result<()> {
     match args.command {
+        SkillsCommand::Layer { command } => {
+            return run_layers(
+                SkillsArgs { command: Some(command) },
+                store,
+                json,
+            );
+        }
+        SkillsCommand::Move { reference, layer } => {
+            let id = resolve_one_skill(store, &reference)?;
+            library_layers::move_skill_to_layer(store, &id, layer.as_deref())
+                .map_err(AppError::db)?;
+            print_json(&serde_json::json!({ "skill": id, "layer": layer, "moved": true }), json);
+            return Ok(());
+        }
         SkillsCommand::List {
             query,
             tags,

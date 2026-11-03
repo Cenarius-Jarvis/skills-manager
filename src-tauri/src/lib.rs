@@ -1041,6 +1041,12 @@ pub fn run() {
             commands::skills::batch_import_folder,
             // Sync
             commands::sync::sync_skill_to_tool,
+            // Library layers
+            commands::layers::library_layers_get,
+            commands::layers::library_layer_create,
+            commands::layers::library_layer_rename,
+            commands::layers::library_layer_delete,
+            commands::layers::library_skill_move,
             commands::sync::unsync_skill_from_tool,
             commands::sync::get_skill_tool_toggles,
             commands::sync::set_skill_tool_toggle,

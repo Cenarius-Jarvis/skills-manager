@@ -348,6 +348,22 @@ impl SkillStore {
         Ok(())
     }
 
+    /// Relocates a skill's library directory record (library-layers moves).
+    /// Agent deployment rows are deliberately untouched: their target paths
+    /// derive from the directory name, which a layer move does not change.
+    pub fn update_skill_central_path(&self, id: &str, central_path: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        let updated = conn.execute(
+            "UPDATE skills SET central_path = ?1, updated_at = ?2 WHERE id = ?3",
+            params![central_path, now, id],
+        )?;
+        if updated == 0 {
+            anyhow::bail!("技能不存在：{id}");
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn update_skill_after_install(
         &self,
